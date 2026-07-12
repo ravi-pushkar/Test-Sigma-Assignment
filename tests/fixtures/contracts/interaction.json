@@ -1,0 +1,14 @@
+{
+  "id": "interaction:2d11939469935035",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "gitea-crawler",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "source_state_id": "screen:7533145bceed1baf",
+  "target_state_id": "screen:b93d56bd39bc697e",
+  "element_id": "element:eb8bc46d98bc6f45",
+  "action": "click",
+  "input_class": null,
+  "timestamp": "2026-07-11T09:30:00+05:30",
+  "success": true
+}

@@ -1,0 +1,14 @@
+{
+  "id": "flow:5b56fed5edefc112",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "gitea-crawler",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "goal": "Create a new issue",
+  "interaction_ids": [
+    "interaction:2d11939469935035"
+  ],
+  "start_state_id": "screen:7533145bceed1baf",
+  "end_state_id": "screen:b93d56bd39bc697e",
+  "discovery_source": "llm_goal"
+}

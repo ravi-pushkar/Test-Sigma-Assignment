@@ -1,0 +1,13 @@
+{
+  "id": "screen:7533145bceed1baf",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "gitea-crawler",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "url": "http://localhost:3000/demo/demo-repo/issues",
+  "route_pattern": "/:owner/:repo/issues",
+  "title": "Issues - demo/demo-repo - Gitea",
+  "dom_artifact": "artifacts/run-0001/screens/issues-list.html",
+  "screenshot_artifact": "artifacts/run-0001/screens/issues-list.png",
+  "visible_text_hash": "6bd88f6f01d9fca764e4c0f8d2d89f682197252f574889e7d9a86acdb95f13fb"
+}

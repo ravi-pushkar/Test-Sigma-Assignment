@@ -1,0 +1,18 @@
+{
+  "id": "pr_change:410b2eb5d07cb116",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "go-gitea/gitea",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "pr_number": 37045,
+  "title": "Improve new issue form behavior",
+  "base_sha": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "head_sha": "e7095e0957a6b46273c2c21afff3450543cb8257",
+  "merge_commit_sha": null,
+  "file": "templates/repo/issue/new_form.tmpl",
+  "change_type": "modified",
+  "patch": "@@ -42,1 +42,1 @@\n-<div class=\"issue-form\">\n+<div class=\"issue-form tw-flex\">",
+  "changed_symbol_ids": [
+    "symbol:e961b5708f9c37be"
+  ]
+}

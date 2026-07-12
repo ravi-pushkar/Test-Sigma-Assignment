@@ -1,0 +1,27 @@
+{
+  "id": "impact:c0da67bfc85a03b0",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "impact-analyzer",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "changed_symbol_id": "symbol:e961b5708f9c37be",
+  "path_entity_ids": [
+    [
+      "symbol:e961b5708f9c37be",
+      "requirement:24c6bb4f7a1a1c7e",
+      "screen:7533145bceed1baf"
+    ],
+    [
+      "symbol:e961b5708f9c37be",
+      "element:eb8bc46d98bc6f45"
+    ]
+  ],
+  "affected_entity_ids": [
+    "requirement:24c6bb4f7a1a1c7e",
+    "screen:7533145bceed1baf",
+    "element:eb8bc46d98bc6f45"
+  ],
+  "severity": "high",
+  "confidence": 0.91,
+  "summary": "PR 37045 changes the issue form template used by the New Issue flow."
+}

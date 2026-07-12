@@ -1,0 +1,26 @@
+{
+  "id": "requirement:24c6bb4f7a1a1c7e",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "pr-requirements",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "statement": "Repository users can open the new issue form from the issue list.",
+  "actor": "repository user",
+  "action": "open",
+  "object": "new issue form",
+  "acceptance_clues": [
+    "The issue list displays a New Issue action.",
+    "The action navigates to /demo/demo-repo/issues/new."
+  ],
+  "source_span": {
+    "uri": "gitea://go-gitea/gitea/pulls/37045",
+    "heading_path": [
+      "Pull Request 37045",
+      "Description"
+    ],
+    "quote": "Keep the New Issue entry point connected to the issue form.",
+    "start_offset": 0,
+    "end_offset": 64
+  },
+  "testable": true
+}

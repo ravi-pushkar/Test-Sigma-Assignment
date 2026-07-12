@@ -1,0 +1,17 @@
+{
+  "id": "trace_link:9d3b4b21ffd5b3fe",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "trace-analyzer",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "source_entity_id": "symbol:e961b5708f9c37be",
+  "target_entity_id": "requirement:24c6bb4f7a1a1c7e",
+  "link_type": "implements",
+  "confidence": 0.94,
+  "method": "template-anchor-match",
+  "evidence": [
+    "templates/repo/issue/new_form.tmpl contains the new issue form",
+    "UI anchor New Issue matches the requirement object"
+  ],
+  "review_status": "auto_accepted"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "symbol:e961b5708f9c37be",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "go-gitea/gitea",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "repo_sha": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "file": "templates/repo/issue/new_form.tmpl",
+  "qualified_name": "templates/repo/issue/new_form.tmpl",
+  "kind": "template",
+  "line_start": 1,
+  "line_end": 187,
+  "ui_anchors": [
+    "New Issue",
+    "issue-title-input"
+  ]
+}

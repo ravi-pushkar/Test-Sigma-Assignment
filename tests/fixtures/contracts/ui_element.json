@@ -1,0 +1,19 @@
+{
+  "id": "element:eb8bc46d98bc6f45",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "gitea-crawler",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "screen_id": "screen:7533145bceed1baf",
+  "role": "link",
+  "name": "New Issue",
+  "locator_evidence": {
+    "css": "a[href='/demo/demo-repo/issues/new']",
+    "text": "New Issue"
+  },
+  "attributes": {
+    "href": "/demo/demo-repo/issues/new",
+    "class": "ui green button"
+  },
+  "bounds": [1072.0, 118.0, 112.0, 36.0]
+}

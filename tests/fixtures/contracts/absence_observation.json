@@ -1,0 +1,15 @@
+{
+  "id": "absence:7cd418569cf20787",
+  "schema_version": "1.0.0",
+  "run_id": "run-0001",
+  "source": "trace-analyzer",
+  "source_revision": "daf581fa892320f5d495b4073d6812b0ad8ddfc8",
+  "requirement_id": "requirement:24c6bb4f7a1a1c7e",
+  "crawl_run_id": "run-0001",
+  "search_scope": "http://localhost:3000/demo/demo-repo/issues?state=closed",
+  "expected_evidence": [
+    "A visible New Issue link on the closed-issues view"
+  ],
+  "confidence": 0.72,
+  "explanation": "The closed-issues state was crawled, but no matching New Issue action was observed."
+}
