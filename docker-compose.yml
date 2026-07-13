@@ -1,0 +1,20 @@
+# Reviewers: this provides Neo4j only. The target app (Gitea) is built from source at a pinned SHA by scripts/bootstrap_gitea.sh — see README.
+services:
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-blastagent-dev}
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  neo4j-data:
