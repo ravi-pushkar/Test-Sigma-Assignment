@@ -1,0 +1,54 @@
+# Blast-radius report: PR #{{ pr.pr_number }}
+
+## What changed
+
+[{{ pr.title }}]({{ pr.url or '#' }}) changes {{ pr.files_changed }} files from `{{ pr.base_sha_short }}` to `{{ pr.head_sha_short }}`.
+
+## Executive summary
+
+{{ findings | length }} changed code areas map to {{ affected_element_count }} UI elements across {{ affected_screen_count }} screens. {{ affected_flow_count }} of {{ crawl_stats.flows }} discovered user flows touch affected elements or screens.
+
+{% if requirements_ingested %}{{ affected_requirements | length }} ingested requirements are linked to affected UI.{% else %}No requirements were ingested in this run, so requirement-level coverage is not assessed.{% endif %}
+
+## Impacts by risk
+
+{% if findings %}{% for finding in findings %}### {{ finding.badge }} — {{ finding.file }}
+
+Changes to {{ finding.file }} affect {% if finding.element_names %}{{ finding.element_names | join(', ') }}{% if finding.element_names_more %}, and {{ finding.element_names_more }} more{% endif %}{% else %}screen behavior{% endif %}{% if finding.routes %} across {{ finding.routes | join(', ') }}{% if finding.routes_more %}, and {{ finding.routes_more }} more{% endif %}{% endif %}.
+
+{% if finding.flows %}Affected user flows: {{ finding.flows | map(attribute='goal') | join('; ') }}
+
+{% endif %}Confidence: {{ finding.confidence_percent }}%.
+
+Evidence: `{{ finding.evidence | join('`; `') }}`
+{% if finding.evidence_more %}
+… plus {{ finding.evidence_more }} more recorded paths (see impact records).
+{% endif %}
+
+{% endfor %}{% else %}No code-to-UI impacts were found from accepted or review-pending links.
+
+{% endif %}## User flows to re-test
+
+{% if affected_flows %}{% for flow in affected_flows %}- {{ flow.goal }} ({{ flow.step_count }} steps)
+{% endfor %}{% else %}No discovered user flows are linked to the affected UI.
+{% endif %}
+## Requirements at risk
+
+{% if not requirements_ingested %}No requirements were ingested in this run; requirement-level coverage is not assessed.
+{% elif affected_requirements %}{% for requirement in affected_requirements %}- {{ requirement }}
+{% endfor %}{% else %}No ingested requirements are linked to the affected UI.
+{% endif %}
+## Not mapped to UI
+
+{% if unmapped %}These changed files could not be mapped to the discovered UI and remain explicit uncertainty:
+
+{% for change in unmapped %}- `{{ change.file or 'unknown file' }}` ({{ change.change_type or 'changed' }}): {{ change.reason or 'mapping unavailable' }}
+{% endfor %}{% else %}Every changed file had at least one accepted or review-pending UI link.
+{% endif %}
+## Run identifiers
+
+- Run ID: `{{ run_id }}`
+- Source revision: `{{ source_revision }}`
+- PR base SHA: `{{ pr.base_sha }}`
+- PR head SHA: `{{ pr.head_sha }}`
+- Generated at: {{ generated_at }}
