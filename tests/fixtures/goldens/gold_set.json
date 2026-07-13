@@ -1,0 +1,77 @@
+{
+  "_provenance": "Hand-labeled by the project author on 2026-07-11 from the three snapshotted docs pages, the seeded demo instance, and the PR #37045 diff. Authored independently of system output; system runs must never edit this file.",
+  "requirements": {
+    "_match_rule": "A gold requirement is 'recalled' if one extracted Requirement's statement+acceptance_clues (casefolded) contain all keywords of the gold entry.",
+    "must_extract": [
+      {
+        "id": "gold-req-label-create",
+        "source_uri": "https://docs.gitea.com/1.27/usage/issues-prs/labels",
+        "keywords": ["label", "creat"],
+        "note": "Users can create labels for a repository (Issues -> Labels)."
+      },
+      {
+        "id": "gold-req-label-classify",
+        "source_uri": "https://docs.gitea.com/1.27/usage/issues-prs/labels",
+        "keywords": ["label", "issue"],
+        "note": "Labels classify issues and pull requests."
+      },
+      {
+        "id": "gold-req-org-labels",
+        "source_uri": "https://docs.gitea.com/1.27/usage/issues-prs/labels",
+        "keywords": ["organization", "label"],
+        "note": "Organization-wide labels shared across repositories."
+      },
+      {
+        "id": "gold-req-issue-template-form",
+        "source_uri": "https://docs.gitea.com/1.27/usage/issues-prs/issue-pull-request-templates",
+        "keywords": ["template", "issue"],
+        "note": "Templates pre-populate the issue creation form."
+      },
+      {
+        "id": "gold-req-linked-reference",
+        "source_uri": "https://docs.gitea.com/1.27/usage/issues-prs/automatically-linked-references",
+        "keywords": ["reference", "issue"],
+        "note": "Text like #1234 in descriptions/comments is parsed into links to issues."
+      }
+    ],
+    "expected_absent_in_crawl": [
+      {
+        "gold_id": "gold-req-issue-template-form",
+        "reason": "The seeded demo repository has no issue template files; the crawl scope never renders a templated issue form."
+      },
+      {
+        "gold_id": "gold-req-org-labels",
+        "reason": "Organization settings pages are outside the allowed crawl routes."
+      }
+    ]
+  },
+  "links": {
+    "_match_rule": "A gold link matches a TraceLink (auto_accepted or needs_review) whose element name equals element_name (casefold), whose element's screen route_pattern equals route, and whose target symbol file equals symbol_file.",
+    "must_link": [
+      {"element_name": "Create Issue", "route": "/{owner}/{repo}/issues/new", "symbol_file": "templates/repo/issue/new_form.tmpl"},
+      {"element_name": "Subscribe", "route": "/{owner}/{repo}/issues/{number}", "symbol_file": "templates/repo/issue/view_content/watching.tmpl"},
+      {"element_name": "Unsubscribe", "route": "/{owner}/{repo}/issues/{number}", "symbol_file": "templates/repo/issue/view_content/watching.tmpl"},
+      {"element_name": "Notifications", "route": "/", "symbol_file": "templates/base/head_navbar_icons.tmpl"},
+      {"element_name": "Projects", "route": "/{owner}/{repo}/issues/{number}", "symbol_file": "templates/repo/issue/sidebar/project_list.tmpl"}
+    ],
+    "must_not_link": [
+      {"element_name": "Sign In", "route": "/user/login", "symbol_file": "templates/repo/issue/new_form.tmpl"},
+      {"element_name": "Create Issue", "route": "/{owner}/{repo}/issues/new", "symbol_file": "templates/repo/issue/view_content/watching.tmpl"}
+    ]
+  },
+  "impacts": {
+    "_match_rule": "Required entities must appear among affected entities of findings for PR 37045; forbidden files must appear in the unmapped list, never in findings.",
+    "pr_number": 37045,
+    "required_affected_routes": ["/{owner}/{repo}/issues/new", "/{owner}/{repo}/issues/{number}"],
+    "required_affected_flow_goal_keywords": [["create", "issue"], ["subscribe"]],
+    "required_unmapped_files": ["web_src/css/modules/button.css", "web_src/css/modules/label.css"],
+    "min_findings": 3
+  },
+  "thresholds": {
+    "requirement_recall_min": 0.8,
+    "link_must_precision": 1.0,
+    "link_recall_min": 0.8,
+    "impact_required_recall": 1.0,
+    "stability_jaccard_min": 0.9
+  }
+}
