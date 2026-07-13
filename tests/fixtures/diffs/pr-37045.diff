@@ -1,0 +1,907 @@
+diff --git a/models/issues/issue_project.go b/models/issues/issue_project.go
+index 0185244..3bb0936 100644
+--- a/models/issues/issue_project.go
++++ b/models/issues/issue_project.go
+@@ -64,36 +64,6 @@ func LoadProjectIssueColumnMap(ctx context.Context, projectID, defaultColumnID i
+ 	return result, nil
+ }
+ 
+-// LoadIssuesFromColumn load issues assigned to this column
+-func LoadIssuesFromColumn(ctx context.Context, b *project_model.Column, opts *IssuesOptions) (IssueList, error) {
+-	issueList, err := Issues(ctx, opts.Copy(func(o *IssuesOptions) {
+-		o.ProjectColumnID = b.ID
+-		o.ProjectID = b.ProjectID
+-		o.SortType = "project-column-sorting"
+-	}))
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	if b.Default {
+-		issues, err := Issues(ctx, opts.Copy(func(o *IssuesOptions) {
+-			o.ProjectColumnID = db.NoConditionID
+-			o.ProjectID = b.ProjectID
+-			o.SortType = "project-column-sorting"
+-		}))
+-		if err != nil {
+-			return nil, err
+-		}
+-		issueList = append(issueList, issues...)
+-	}
+-
+-	if err := issueList.LoadComments(ctx); err != nil {
+-		return nil, err
+-	}
+-
+-	return issueList, nil
+-}
+-
+ // IssueAssignOrRemoveProject changes the project associated with an issue
+ // If newProjectID is 0, the issue is removed from the project
+ func IssueAssignOrRemoveProject(ctx context.Context, issue *Issue, doer *user_model.User, newProjectID, newColumnID int64) error {
+diff --git a/models/project/column.go b/models/project/column.go
+index 79f6dfe..7365204 100644
+--- a/models/project/column.go
++++ b/models/project/column.go
+@@ -257,9 +257,12 @@ func (p *Project) GetColumns(ctx context.Context) (ColumnList, error) {
+ 	return columns, nil
+ }
+ 
+-// getDefaultColumn return default column and ensure only one exists
+-func (p *Project) getDefaultColumn(ctx context.Context) (*Column, error) {
++// getDefaultColumnWithFallback return default column if one exists
++// otherwise return the first column by sorting and set it as default column
++func (p *Project) getDefaultColumnWithFallback(ctx context.Context) (*Column, error) {
+ 	var column Column
++
++	// try to find a column "default=true"
+ 	has, err := db.GetEngine(ctx).
+ 		Where("project_id=? AND `default` = ?", p.ID, true).
+ 		Desc("id").Get(&column)
+@@ -270,14 +273,29 @@ func (p *Project) getDefaultColumn(ctx context.Context) (*Column, error) {
+ 	if has {
+ 		return &column, nil
+ 	}
++
++	// try to find the first column by sorting
++	has, err = db.GetEngine(ctx).Where("project_id=?", p.ID).OrderBy("sorting, id").Get(&column)
++	if err != nil {
++		return nil, err
++	}
++	if has {
++		column.Default = true
++		if _, err := db.GetEngine(ctx).ID(column.ID).Cols("`default`").Update(&column); err != nil {
++			return nil, err
++		}
++		return &column, nil
++	}
++
+ 	return nil, ErrProjectColumnNotExist{ColumnID: 0}
+ }
+ 
+ // MustDefaultColumn returns the default column for a project.
+ // If one exists, it is returned
+ // If none exists, the first column will be elevated to the default column of this project
++// If there is no column, it creates a default column and returns it
+ func (p *Project) MustDefaultColumn(ctx context.Context) (*Column, error) {
+-	c, err := p.getDefaultColumn(ctx)
++	c, err := p.getDefaultColumnWithFallback(ctx)
+ 	if err != nil && !IsErrProjectColumnNotExist(err) {
+ 		return nil, err
+ 	}
+@@ -285,21 +303,8 @@ func (p *Project) MustDefaultColumn(ctx context.Context) (*Column, error) {
+ 		return c, nil
+ 	}
+ 
+-	var column Column
+-	has, err := db.GetEngine(ctx).Where("project_id=?", p.ID).OrderBy("sorting, id").Get(&column)
+-	if err != nil {
+-		return nil, err
+-	}
+-	if has {
+-		column.Default = true
+-		if _, err := db.GetEngine(ctx).ID(column.ID).Cols("`default`").Update(&column); err != nil {
+-			return nil, err
+-		}
+-		return &column, nil
+-	}
+-
+ 	// create a default column if none is found
+-	column = Column{
++	column := Column{
+ 		ProjectID: p.ID,
+ 		Default:   true,
+ 		Title:     "Uncategorized",
+diff --git a/routers/web/repo/issue_new.go b/routers/web/repo/issue_new.go
+index 1393f62..98fb842 100644
+--- a/routers/web/repo/issue_new.go
++++ b/routers/web/repo/issue_new.go
+@@ -121,11 +121,9 @@ func NewIssue(ctx *context.Context) {
+ 	}
+ 
+ 	pageMetaData.MilestonesData.SelectedMilestoneID = ctx.FormInt64("milestone")
+-	pageMetaData.ProjectsData.SelectedProjectID = ctx.FormInt64("project")
+-	if pageMetaData.ProjectsData.SelectedProjectID > 0 {
+-		if len(ctx.Req.URL.Query().Get("project")) > 0 {
+-			ctx.Data["redirect_after_creation"] = "project"
+-		}
++	pageMetaData.ProjectsData.SelectedProjectIDs, _ = base.StringsToInt64s(strings.Split(ctx.FormString("project"), ","))
++	if len(pageMetaData.ProjectsData.SelectedProjectIDs) == 1 {
++		ctx.Data["redirect_after_creation"] = "project"
+ 	}
+ 
+ 	tags, err := repo_model.GetTagNamesByRepoID(ctx, ctx.Repo.Repository.ID)
+@@ -273,7 +271,7 @@ func ValidateRepoMetasForNewIssue(ctx *context.Context, form forms.CreateIssueFo
+ 		ctx.NotFound(nil)
+ 		return ret
+ 	}
+-	pageMetaData.ProjectsData.SelectedProjectID = form.ProjectID
++	pageMetaData.ProjectsData.SelectedProjectIDs = util.Iif(form.ProjectID > 0, []int64{form.ProjectID}, nil)
+ 
+ 	// prepare assignees
+ 	candidateAssignees := toSet(pageMetaData.AssigneesData.CandidateAssignees, func(user *user_model.User) int64 { return user.ID })
+diff --git a/routers/web/repo/issue_page_meta.go b/routers/web/repo/issue_page_meta.go
+index 719b485..639333a 100644
+--- a/routers/web/repo/issue_page_meta.go
++++ b/routers/web/repo/issue_page_meta.go
+@@ -34,9 +34,14 @@ type issueSidebarAssigneesData struct {
+ }
+ 
+ type issueSidebarProjectsData struct {
+-	SelectedProjectID int64
+-	OpenProjects      []*project_model.Project
+-	ClosedProjects    []*project_model.Project
++	SelectedProjectIDs []int64 // TODO: support multiple projects in the future
++
++	// the "selected" fields are only valid when len(SelectedProjectIDs)==1
++	SelectedProjectColumns []*project_model.Column
++	SelectedProjectColumn  *project_model.Column
++
++	OpenProjects   []*project_model.Project
++	ClosedProjects []*project_model.Project
+ }
+ 
+ type IssuePageMetaData struct {
+@@ -92,6 +97,11 @@ func retrieveRepoIssueMetaData(ctx *context.Context, repo *repo_model.Repository
+ 		return data
+ 	}
+ 
++	data.retrieveProjectData(ctx)
++	if ctx.Written() {
++		return data
++	}
++
+ 	// TODO: the issue/pull permissions are quite complex and unclear
+ 	// A reader could create an issue/PR with setting some meta (eg: assignees from issue template, reviewers, target branch)
+ 	// A reader(creator) could update some meta (eg: target branch), but can't change assignees anymore.
+@@ -158,9 +168,33 @@ func (d *IssuePageMetaData) retrieveAssigneesData(ctx *context.Context) {
+ 	ctx.Data["Assignees"] = d.AssigneesData.CandidateAssignees
+ }
+ 
++func (d *IssuePageMetaData) retrieveProjectData(ctx *context.Context) {
++	if d.Issue == nil || d.Issue.Project == nil {
++		return
++	}
++	d.ProjectsData.SelectedProjectIDs = []int64{d.Issue.Project.ID}
++	columns, err := d.Issue.Project.GetColumns(ctx)
++	if err != nil {
++		ctx.ServerError("GetProjectColumns", err)
++		return
++	}
++	d.ProjectsData.SelectedProjectColumns = columns
++	columnID, err := d.Issue.ProjectColumnID(ctx)
++	if err != nil {
++		ctx.ServerError("ProjectColumnID", err)
++		return
++	}
++	for _, col := range columns {
++		if col.ID == columnID {
++			d.ProjectsData.SelectedProjectColumn = col
++			break
++		}
++	}
++}
++
+ func (d *IssuePageMetaData) retrieveProjectsDataForIssueWriter(ctx *context.Context) {
+ 	if d.Issue != nil && d.Issue.Project != nil {
+-		d.ProjectsData.SelectedProjectID = d.Issue.Project.ID
++		d.ProjectsData.SelectedProjectIDs = []int64{d.Issue.Project.ID}
+ 	}
+ 	d.ProjectsData.OpenProjects, d.ProjectsData.ClosedProjects = retrieveProjectsInternal(ctx, ctx.Repo.Repository)
+ }
+diff --git a/services/projects/issue.go b/services/projects/issue.go
+index 590fe96..377c4b9 100644
+--- a/services/projects/issue.go
++++ b/services/projects/issue.go
+@@ -87,7 +87,7 @@ func MoveIssuesOnProjectColumn(ctx context.Context, doer *user_model.User, colum
+ }
+ 
+ // LoadIssuesFromProject load issues assigned to each project column inside the given project
+-func LoadIssuesFromProject(ctx context.Context, project *project_model.Project, opts *issues_model.IssuesOptions) (map[int64]issues_model.IssueList, error) {
++func LoadIssuesFromProject(ctx context.Context, project *project_model.Project, opts *issues_model.IssuesOptions) (results map[int64]issues_model.IssueList, _ error) {
+ 	issueList, err := issues_model.Issues(ctx, opts.Copy(func(o *issues_model.IssuesOptions) {
+ 		o.ProjectID = project.ID
+ 		o.SortType = "project-column-sorting"
+@@ -95,7 +95,10 @@ func LoadIssuesFromProject(ctx context.Context, project *project_model.Project,
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-
++	if len(issueList) == 0 {
++		// if no issue, return directly, then no need to create a default column for an empty project
++		return results, nil
++	}
+ 	if err := issueList.LoadComments(ctx); err != nil {
+ 		return nil, err
+ 	}
+@@ -110,7 +113,7 @@ func LoadIssuesFromProject(ctx context.Context, project *project_model.Project,
+ 		return nil, err
+ 	}
+ 
+-	results := make(map[int64]issues_model.IssueList)
++	results = make(map[int64]issues_model.IssueList)
+ 	for _, issue := range issueList {
+ 		projectColumnID, ok := issueColumnMap[issue.ID]
+ 		if !ok {
+diff --git a/templates/base/head_navbar.tmpl b/templates/base/head_navbar.tmpl
+index 447f785..cc7e4e6 100644
+--- a/templates/base/head_navbar.tmpl
++++ b/templates/base/head_navbar.tmpl
+@@ -47,7 +47,7 @@
+ 				<span class="text">
+ 					{{ctx.AvatarUtils.Avatar .SignedUser 24 "tw-mr-1"}}
+ 					<span class="only-mobile">{{.SignedUser.Name}}</span>
+-					<span class="not-mobile">{{svg "octicon-triangle-down"}}</span>
++					<span class="not-mobile flex-text-block">{{svg "octicon-triangle-down"}}</span>
+ 				</span>
+ 				<div class="menu user-menu">
+ 					<div class="header">
+@@ -64,9 +64,9 @@
+ 		{{else if .IsSigned}}
+ 			{{template "base/head_navbar_icons" dict "ItemExtraClass" "not-mobile" "PageGlobalData" .PageGlobalData}}
+ 			<div class="ui dropdown jump item" data-tooltip-content="{{ctx.Locale.Tr "create_new"}}">
+-				<span class="text">
++				<span class="flex-text-block">
+ 					{{svg "octicon-plus"}}
+-					<span class="not-mobile">{{svg "octicon-triangle-down"}}</span>
++					<span class="not-mobile flex-text-block">{{svg "octicon-triangle-down"}}</span>
+ 					<span class="only-mobile">{{ctx.Locale.Tr "create_new"}}</span>
+ 				</span>
+ 				<div class="menu">
+@@ -93,7 +93,7 @@
+ 						{{if .IsAdmin}}{{svg "octicon-shield-check" 16 "navbar-admin-badge"}}{{end}}
+ 					</span>
+ 					<span class="only-mobile">{{.SignedUser.Name}}</span>
+-					<span class="not-mobile">{{svg "octicon-triangle-down"}}</span>
++					<span class="not-mobile flex-text-block">{{svg "octicon-triangle-down"}}</span>
+ 				</span>
+ 				<div class="menu user-menu">
+ 					<div class="header">
+diff --git a/templates/base/head_navbar_icons.tmpl b/templates/base/head_navbar_icons.tmpl
+index 89b0238..019e78c 100644
+--- a/templates/base/head_navbar_icons.tmpl
++++ b/templates/base/head_navbar_icons.tmpl
+@@ -5,14 +5,14 @@
+ 	{{- $notificationUnreadCount := call $data.GetNotificationUnreadCount -}}
+ 	{{if $activeStopwatch}}
+ 	<a class="item active-stopwatch {{$itemExtraClass}}" href="{{$activeStopwatch.IssueLink}}" title="{{ctx.Locale.Tr "active_stopwatch"}}" data-seconds="{{$activeStopwatch.Seconds}}">
+-		<div class="tw-relative">
++		<div class="tw-relative flex-text-block">
+ 			{{svg "octicon-stopwatch"}}
+ 			<span class="header-stopwatch-dot"></span>
+ 		</div>
+ 	</a>
+ 	{{end}}
+ 	<a class="item {{$itemExtraClass}}" href="{{AppSubUrl}}/notifications" data-tooltip-content="{{ctx.Locale.Tr "notifications"}}">
+-		<div class="tw-relative">
++		<div class="tw-relative flex-text-block">
+ 			{{svg "octicon-bell"}}
+ 			<span class="notification_count{{if not $notificationUnreadCount}} tw-hidden{{end}}">{{$notificationUnreadCount}}</span>
+ 		</div>
+diff --git a/templates/repo/issue/new_form.tmpl b/templates/repo/issue/new_form.tmpl
+index 5475224..7d669fe 100644
+--- a/templates/repo/issue/new_form.tmpl
++++ b/templates/repo/issue/new_form.tmpl
+@@ -46,7 +46,7 @@
+ 		</div>
+ 	</div>
+ 
+-	<div class="issue-content-right ui segment">
++	<div class="issue-content-right ui segment" data-global-init="initRepoIssueSidebar">
+ 		{{template "repo/issue/branch_selector_field" $}}{{/* TODO: RemoveIssueRef: template "repo/issue/branch_selector_field" $*/}}
+ 
+ 		{{if .PageIsComparePull}}
+diff --git a/templates/repo/issue/sidebar/project_list.tmpl b/templates/repo/issue/sidebar/project_list.tmpl
+index be8097f..ca3b6bd 100644
+--- a/templates/repo/issue/sidebar/project_list.tmpl
++++ b/templates/repo/issue/sidebar/project_list.tmpl
+@@ -5,7 +5,7 @@
+ <div class="issue-sidebar-combo" data-selection-mode="single" data-update-algo="all"
+ 		{{if $pageMeta.Issue}}data-update-url="{{$pageMeta.RepoLink}}/issues/projects?issue_ids={{$pageMeta.Issue.ID}}"{{end}}
+ >
+-	<input class="combo-value" name="project_id" type="hidden" value="{{$data.SelectedProjectID}}">
++	<input class="combo-value" name="project_id" type="hidden" value="{{if and $pageMeta.CanModifyIssueOrPull $data.SelectedProjectIDs}}{{index $data.SelectedProjectIDs 0}}{{end}}">
+ 	<div class="ui dropdown full-width {{if not $pageMeta.CanModifyIssueOrPull}}disabled{{end}}">
+ 		<a class="fixed-text muted">
+ 			<strong>{{ctx.Locale.Tr "repo.issues.new.projects"}}</strong> {{if $pageMeta.CanModifyIssueOrPull}}{{svg "octicon-gear"}}{{end}}
+diff --git a/templates/repo/issue/view_content.tmpl b/templates/repo/issue/view_content.tmpl
+index 2bd75cd..275dd47 100644
+--- a/templates/repo/issue/view_content.tmpl
++++ b/templates/repo/issue/view_content.tmpl
+@@ -66,6 +66,7 @@
+ 			</div>
+ 
+ 			{{template "repo/issue/view_content/comments" .}}
++			<div class="timeline-item tw-hidden" id="timeline-comments-end"></div>
+ 
+ 			{{if and .Issue.IsPull (not $.Repository.IsArchived)}}
+ 				{{template "repo/issue/view_content/pull_merge_box".}}
+diff --git a/templates/repo/issue/view_content/sidebar.tmpl b/templates/repo/issue/view_content/sidebar.tmpl
+index 987a882..4dff508 100644
+--- a/templates/repo/issue/view_content/sidebar.tmpl
++++ b/templates/repo/issue/view_content/sidebar.tmpl
+@@ -1,4 +1,4 @@
+-<div class="issue-content-right ui segment">
++<div class="issue-content-right ui segment" data-global-init="initRepoIssueSidebar">
+ 	{{template "repo/issue/branch_selector_field" $}}{{/* TODO: RemoveIssueRef: template "repo/issue/branch_selector_field" $*/}}
+ 
+ 	{{if .Issue.IsPull}}
+diff --git a/templates/repo/issue/view_content/watching.tmpl b/templates/repo/issue/view_content/watching.tmpl
+index 05936d0..1abc927 100644
+--- a/templates/repo/issue/view_content/watching.tmpl
++++ b/templates/repo/issue/view_content/watching.tmpl
+@@ -2,10 +2,10 @@
+ 	<input type="hidden" name="watch" value="{{if $.IssueWatch.IsWatching}}0{{else}}1{{end}}">
+ 	<button class="fluid ui button">
+ 		{{if $.IssueWatch.IsWatching}}
+-			{{svg "octicon-mute" 16 "tw-mr-2"}}
++			{{svg "octicon-mute" 16}}
+ 			{{ctx.Locale.Tr "repo.issues.unsubscribe"}}
+ 		{{else}}
+-			{{svg "octicon-unmute" 16 "tw-mr-2"}}
++			{{svg "octicon-unmute" 16}}
+ 			{{ctx.Locale.Tr "repo.issues.subscribe"}}
+ 		{{end}}
+ 	</button>
+diff --git a/templates/shared/issuelist.tmpl b/templates/shared/issuelist.tmpl
+index 9f10663..aaf80a1 100644
+--- a/templates/shared/issuelist.tmpl
++++ b/templates/shared/issuelist.tmpl
+@@ -5,7 +5,7 @@
+ 
+ 			<div class="flex-item-leading">
+ 				{{/* using some tw helpers is the only way to align the checkbox */}}
+-				<div class="flex-text-inline tw-mt-[2px]">
++				<div class="flex-text-inline tw-mt-[3px]">
+ 					{{if $.CanWriteIssuesOrPulls}}
+ 						<input type="checkbox" autocomplete="off" class="issue-checkbox tw-mr-[14px]" data-issue-id={{.ID}} aria-label="{{ctx.Locale.Tr "repo.issues.action_check"}} &quot;{{.Title}}&quot;">
+ 					{{end}}
+diff --git a/web_src/css/modules/button.css b/web_src/css/modules/button.css
+index 9458f11..9b509f8 100644
+--- a/web_src/css/modules/button.css
++++ b/web_src/css/modules/button.css
+@@ -214,7 +214,6 @@
+ 
+ .ui.fluid.button {
+   width: 100%;
+-  display: block;
+ }
+ 
+ .ui.primary.button,
+diff --git a/web_src/css/modules/label.css b/web_src/css/modules/label.css
+index cf850e4..6db13e2 100644
+--- a/web_src/css/modules/label.css
++++ b/web_src/css/modules/label.css
+@@ -292,6 +292,7 @@ If the labels-list itself needs some layouts, use extra classes or "tw" helpers.
+ }
+ 
+ .labels-list a {
++  display: inline-flex;
+   max-width: 100%; /* for ellipsis */
+ }
+ 
+diff --git a/web_src/js/features/repo-issue-sidebar-combolist.test.ts b/web_src/js/features/repo-issue-sidebar-combolist.test.ts
+new file mode 100644
+index 0000000..ee2ea57
+--- /dev/null
++++ b/web_src/js/features/repo-issue-sidebar-combolist.test.ts
+@@ -0,0 +1,61 @@
++import {syncIssueMainContentTimelineItems} from './repo-issue-sidebar-combolist.ts';
++import {createElementFromHTML} from '../utils/dom.ts';
++
++describe('syncIssueMainContentTimelineItems', () => {
++  test('InsertNew', () => {
++    const oldContent = createElementFromHTML(`
++    <div>
++        <div class="timeline-item">First</div>
++        <div class="timeline-item" id="timeline-comments-end"></div>
++    </div>
++  `);
++    const newContent = createElementFromHTML(`
++    <div>
++        <div class="timeline-item" id="a">New</div>
++    </div>
++  `);
++    syncIssueMainContentTimelineItems(oldContent, newContent);
++    expect(oldContent.innerHTML.replace(/>\s+</g, '><').trim()).toBe(
++      `<div class="timeline-item">First</div>` +
++      `<div class="timeline-item" id="a">New</div>` +
++      `<div class="timeline-item" id="timeline-comments-end"></div>`,
++    );
++  });
++
++  test('Sync', () => {
++    const oldContent = createElementFromHTML(`
++    <div>
++      <div class="timeline-item">First</div>
++      <div class="timeline-item" id="it-1">Item 1</div>
++      <div class="timeline-item event" id="it-2">Item 2</div>
++      <div class="timeline-item" id="it-3">Item 3</div>
++      <div class="timeline-item event" id="it-4">Item 4</div>
++      <div class="timeline-item" id="timeline-comments-end"></div>
++      <div class="timeline-item">Other</div>
++    </div>
++  `);
++    const newContent = createElementFromHTML(`
++    <div>
++      <div class="timeline-item" id="it-1">New 1</div>
++      <div class="timeline-item event" id="it-2">New 2</div>
++      <div class="timeline-item" id="it-x">New X</div>
++    </div>
++  `);
++    syncIssueMainContentTimelineItems(oldContent, newContent);
++
++    // Item 1 won't be replaced because it's not an event
++    // Item 2 will be replaced with New 2
++    // Item 3 will be kept because it's not in new content
++    // Item 4 will be removed because it's not in new content, and it's an event
++    // New X will be inserted at the end of timeline items (before timeline-comments-end)
++    expect(oldContent.innerHTML.replace(/>\s+</g, '><').trim()).toBe(
++      `<div class="timeline-item">First</div>` +
++      `<div class="timeline-item" id="it-1">Item 1</div>` +
++      `<div class="timeline-item event" id="it-2">New 2</div>` +
++      `<div class="timeline-item" id="it-3">Item 3</div>` +
++      `<div class="timeline-item" id="it-x">New X</div>` +
++      `<div class="timeline-item" id="timeline-comments-end"></div>` +
++      `<div class="timeline-item">Other</div>`,
++    );
++  });
++});
+diff --git a/web_src/js/features/repo-issue-sidebar-combolist.ts b/web_src/js/features/repo-issue-sidebar-combolist.ts
+index aaff380..b88bd7e 100644
+--- a/web_src/js/features/repo-issue-sidebar-combolist.ts
++++ b/web_src/js/features/repo-issue-sidebar-combolist.ts
+@@ -1,25 +1,40 @@
+ import {fomanticQuery} from '../modules/fomantic/base.ts';
+-import {POST} from '../modules/fetch.ts';
++import {GET, POST} from '../modules/fetch.ts';
++import {showErrorToast} from '../modules/toast.ts';
+ import {addDelegatedEventListener, queryElemChildren, queryElems, toggleElem} from '../utils/dom.ts';
++import {parseDom} from '../utils.ts';
+ 
+-// if there are draft comments, confirm before reloading, to avoid losing comments
+-function issueSidebarReloadConfirmDraftComment() {
+-  const commentTextareas = [
+-    document.querySelector<HTMLTextAreaElement>('.edit-content-zone:not(.tw-hidden) textarea'),
+-    document.querySelector<HTMLTextAreaElement>('#comment-form textarea'),
+-  ];
+-  for (const textarea of commentTextareas) {
+-    // Most users won't feel too sad if they lose a comment with 10 chars, they can re-type these in seconds.
+-    // But if they have typed more (like 50) chars and the comment is lost, they will be very unhappy.
+-    if (textarea && textarea.value.trim().length > 10) {
+-      textarea.parentElement!.scrollIntoView();
+-      if (!window.confirm('Page will be reloaded, but there are draft comments. Continuing to reload will discard the comments. Continue?')) {
+-        return;
++export function syncIssueMainContentTimelineItems(oldMainContent: Element, newMainContent: Element) {
++  // find the end of comments timeline by "id=timeline-comments-end" in current main content, and insert new items before it
++  const timelineEnd = oldMainContent.querySelector('.timeline-item[id="timeline-comments-end"]');
++  if (!timelineEnd) return;
++
++  const oldTimelineItems = oldMainContent.querySelectorAll(`.timeline-item[id]`);
++  for (const oldItem of oldTimelineItems) {
++    const oldItemId = oldItem.getAttribute('id')!;
++    const newItem = newMainContent.querySelector(`.timeline-item[id="${CSS.escape(oldItemId)}"]`);
++    if (oldItem.classList.contains('event') && !newItem) {
++      // if the item is not in new content, we want to remove it from old content only if it's an event item, otherwise we keep it
++      oldItem.remove();
++    }
++  }
++
++  const newTimelineItems = newMainContent.querySelectorAll(`.timeline-item[id]`);
++  for (const newItem of newTimelineItems) {
++    const newItemId = newItem.getAttribute('id')!;
++    const oldItem = oldMainContent.querySelector(`.timeline-item[id="${CSS.escape(newItemId)}"]`);
++    if (oldItem) {
++      if (oldItem.classList.contains('event')) {
++        // for event item (e.g.: "add & remove labels"), we want to replace the existing one if exists
++        // because the label operations can be merged into one event item, so the new item might be different from the old one
++        oldItem.replaceWith(newItem);
++        window.htmx.process(newItem);
+       }
+-      break;
++      continue;
+     }
++    timelineEnd.insertAdjacentElement('beforebegin', newItem);
++    window.htmx.process(newItem);
+   }
+-  window.location.reload();
+ }
+ 
+ export class IssueSidebarComboList {
+@@ -27,11 +42,14 @@ export class IssueSidebarComboList {
+   updateAlgo: string;
+   selectionMode: string;
+   elDropdown: HTMLElement;
+-  elList: HTMLElement;
++  elList: HTMLElement | null;
+   elComboValue: HTMLInputElement;
+   initialValues: string[];
+   container: HTMLElement;
+ 
++  elIssueMainContent: HTMLElement;
++  elIssueSidebar: HTMLElement;
++
+   constructor(container: HTMLElement) {
+     this.container = container;
+     this.updateUrl = container.getAttribute('data-update-url')!;
+@@ -40,8 +58,11 @@ export class IssueSidebarComboList {
+     if (!['single', 'multiple'].includes(this.selectionMode)) throw new Error(`Invalid data-update-on: ${this.selectionMode}`);
+     if (!['diff', 'all'].includes(this.updateAlgo)) throw new Error(`Invalid data-update-algo: ${this.updateAlgo}`);
+     this.elDropdown = container.querySelector<HTMLElement>(':scope > .ui.dropdown')!;
+-    this.elList = container.querySelector<HTMLElement>(':scope > .ui.list')!;
++    this.elList = container.querySelector<HTMLElement>(':scope > .ui.list');
+     this.elComboValue = container.querySelector<HTMLInputElement>(':scope > .combo-value')!;
++
++    this.elIssueMainContent = document.querySelector('.issue-content-left')!;
++    this.elIssueSidebar = document.querySelector('.issue-content-right')!;
+   }
+ 
+   collectCheckedValues() {
+@@ -49,6 +70,7 @@ export class IssueSidebarComboList {
+   }
+ 
+   updateUiList(changedValues: Array<string>) {
++    if (!this.elList) return;
+     const elEmptyTip = this.elList.querySelector('.item.empty-list')!;
+     queryElemChildren(this.elList, '.item:not(.empty-list)', (el) => el.remove());
+     for (const value of changedValues) {
+@@ -62,22 +84,58 @@ export class IssueSidebarComboList {
+     toggleElem(elEmptyTip, !hasItems);
+   }
+ 
+-  async updateToBackend(changedValues: Array<string>) {
++  async reloadPagePartially() {
++    const resp = await GET(window.location.href);
++    if (!resp.ok) throw new Error(`Failed to reload page: ${resp.statusText}`);
++    const doc = parseDom(await resp.text(), 'text/html');
++
++    // we can safely replace the whole right part (sidebar) because there are only some dropdowns and lists
++    const newSidebar = doc.querySelector('.issue-content-right')!;
++    this.elIssueSidebar.replaceWith(newSidebar);
++    window.htmx.process(newSidebar);
++
++    // for the main content (left side), at the moment we only support handling known timeline items
++    const newMainContent = doc.querySelector('.issue-content-left')!;
++    syncIssueMainContentTimelineItems(this.elIssueMainContent, newMainContent);
++  }
++
++  async sendRequestToBackend(changedValues: Array<string>): Promise<Response | null> {
++    let lastResp: Response | null = null;
+     if (this.updateAlgo === 'diff') {
+       for (const value of this.initialValues) {
+         if (!changedValues.includes(value)) {
+-          await POST(this.updateUrl, {data: new URLSearchParams({action: 'detach', id: value})});
++          lastResp = await POST(this.updateUrl, {data: new URLSearchParams({action: 'detach', id: value})});
++          if (!lastResp.ok) return lastResp;
+         }
+       }
+       for (const value of changedValues) {
+         if (!this.initialValues.includes(value)) {
+-          await POST(this.updateUrl, {data: new URLSearchParams({action: 'attach', id: value})});
++          lastResp = await POST(this.updateUrl, {data: new URLSearchParams({action: 'attach', id: value})});
++          if (!lastResp.ok) return lastResp;
+         }
+       }
+     } else {
+-      await POST(this.updateUrl, {data: new URLSearchParams({id: changedValues.join(',')})});
++      lastResp = await POST(this.updateUrl, {data: new URLSearchParams({id: changedValues.join(',')})});
++    }
++    return lastResp;
++  }
++
++  async updateToBackend(changedValues: Array<string>) {
++    this.elIssueSidebar.classList.add('is-loading');
++    try {
++      const resp = await this.sendRequestToBackend(changedValues);
++      if (!resp) return; // no request sent, no need to reload
++      if (!resp.ok) {
++        showErrorToast(`Failed to update to backend: ${resp.statusText}`);
++        return;
++      }
++      await this.reloadPagePartially();
++    } catch (e) {
++      console.error('Failed to update to backend', e);
++      showErrorToast(`Failed to update to backend: ${e}`);
++    } finally {
++      this.elIssueSidebar.classList.remove('is-loading');
+     }
+-    issueSidebarReloadConfirmDraftComment();
+   }
+ 
+   async doUpdate() {
+diff --git a/web_src/js/features/repo-issue-sidebar.md b/web_src/js/features/repo-issue-sidebar.md
+index d732bc6..1378d87 100644
+--- a/web_src/js/features/repo-issue-sidebar.md
++++ b/web_src/js/features/repo-issue-sidebar.md
+@@ -25,12 +25,15 @@ If there is `data-update-url`, it also calls backend to attach/detach the change
+ Also, the changed items will be synchronized to the `ui list` items.
+ The menu items must have correct `href`, otherwise the links of synchronized (cloned) items would be wrong.
+ 
++The `ui list` is optional, so a single dropdown can also work, to select items and update them to backend.
++
+ Synchronization logic:
+ * On page load:
+   * If the dropdown menu contains checked items, there will be no synchronization.
+     In this case, it's assumed that the dropdown menu is already in sync with the list.
+   * If the dropdown menu doesn't contain checked items, it will use dropdown's value to mark the selected items as checked.
+     And the selected (checked) items will be synchronized to the list.
++    Dropdown's value should be empty if the there is no dropdown item but a pre-defined list item need to be displayed.
+ * On dropdown selection change:
+   * The selected items will be synchronized to the list after the dropdown is hidden
+ 
+diff --git a/web_src/js/features/repo-issue-sidebar.ts b/web_src/js/features/repo-issue-sidebar.ts
+index 2ff077e..2983b6e 100644
+--- a/web_src/js/features/repo-issue-sidebar.ts
++++ b/web_src/js/features/repo-issue-sidebar.ts
+@@ -1,12 +1,18 @@
+ import {POST} from '../modules/fetch.ts';
+ import {queryElems, toggleElem} from '../utils/dom.ts';
+ import {IssueSidebarComboList} from './repo-issue-sidebar-combolist.ts';
++import {registerGlobalInitFunc} from '../modules/observer.ts';
++import {parseIssuePageInfo} from '../utils.ts';
++import {html} from '../utils/html.ts';
++import {fomanticQuery} from '../modules/fomantic/base.ts';
++import {showTemporaryTooltip} from '../modules/tippy.ts';
+ 
+-function initBranchSelector() {
++const {appSubUrl} = window.config;
++
++function initRepoIssueBranchSelector(elSidebar: HTMLElement) {
+   // TODO: RemoveIssueRef: see "repo/issue/branch_selector_field.tmpl"
+-  const elSelectBranch = document.querySelector('.ui.dropdown.select-branch.branch-selector-dropdown');
++  const elSelectBranch = elSidebar.querySelector('.ui.dropdown.select-branch.branch-selector-dropdown');
+   if (!elSelectBranch) return;
+-
+   const urlUpdateIssueRef = elSelectBranch.getAttribute('data-url-update-issueref');
+   const elBranchMenu = elSelectBranch.querySelector('.reference-list-menu')!;
+   queryElems(elBranchMenu, '.item:not(.no-select)', (el) => el.addEventListener('click', async function (e) {
+@@ -30,23 +36,84 @@ function initBranchSelector() {
+   }));
+ }
+ 
+-function initRepoIssueDue() {
+-  const form = document.querySelector<HTMLFormElement>('.issue-due-form');
++function initRepoIssueDue(elSidebar: HTMLElement) {
++  const form = elSidebar.querySelector<HTMLFormElement>('.issue-due-form');
+   if (!form) return;
+   const deadline = form.querySelector<HTMLInputElement>('input[name=deadline]')!;
+-  document.querySelector('.issue-due-edit')?.addEventListener('click', () => {
++  elSidebar.querySelector('.issue-due-edit')?.addEventListener('click', () => {
+     toggleElem(form);
+   });
+-  document.querySelector('.issue-due-remove')?.addEventListener('click', () => {
++  elSidebar.querySelector('.issue-due-remove')?.addEventListener('click', () => {
+     deadline.value = '';
+     form.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+   });
+ }
+ 
+-export function initRepoIssueSidebar() {
+-  initBranchSelector();
+-  initRepoIssueDue();
++export function initRepoIssueSidebarDependency(elSidebar: HTMLElement) {
++  const elDropdown = elSidebar.querySelector('#new-dependency-drop-list');
++  if (!elDropdown) return;
+ 
+-  // init the combo list: a dropdown for selecting items, and a list for showing selected items and related actions
+-  queryElems<HTMLElement>(document, '.issue-sidebar-combo', (el) => new IssueSidebarComboList(el).init());
++  const issuePageInfo = parseIssuePageInfo();
++  const crossRepoSearch = elDropdown.getAttribute('data-issue-cross-repo-search');
++  let issueSearchUrl = `${issuePageInfo.repoLink}/issues/search?q={query}&type=${issuePageInfo.issueDependencySearchType}`;
++  if (crossRepoSearch === 'true') {
++    issueSearchUrl = `${appSubUrl}/issues/search?q={query}&priority_repo_id=${issuePageInfo.repoId}&type=${issuePageInfo.issueDependencySearchType}`;
++  }
++  fomanticQuery(elDropdown).dropdown({
++    fullTextSearch: true,
++    apiSettings: {
++      cache: false,
++      rawResponse: true,
++      url: issueSearchUrl,
++      onResponse(response: any) {
++        const filteredResponse = {success: true, results: [] as Array<Record<string, any>>};
++        const currIssueId = elDropdown.getAttribute('data-issue-id');
++        // Parse the response from the api to work with our dropdown
++        for (const issue of response) {
++          // Don't list current issue in the dependency list.
++          if (String(issue.id) === currIssueId) continue;
++          filteredResponse.results.push({
++            value: issue.id,
++            name: html`<div class="gt-ellipsis">#${issue.number} ${issue.title}</div><div class="text small tw-break-anywhere">${issue.repository.full_name}</div>`,
++          });
++        }
++        return filteredResponse;
++      },
++    },
++  });
++}
++
++export function initRepoPullRequestAllowMaintainerEdit(elSidebar: HTMLElement) {
++  const wrapper = elSidebar.querySelector('#allow-edits-from-maintainers')!;
++  if (!wrapper) return;
++  const checkbox = wrapper.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
++  checkbox.addEventListener('input', async () => {
++    const url = `${wrapper.getAttribute('data-url')}/set_allow_maintainer_edit`;
++    wrapper.classList.add('is-loading');
++    try {
++      const resp = await POST(url, {data: new URLSearchParams({allow_maintainer_edit: String(checkbox.checked)})});
++      if (!resp.ok) {
++        throw new Error('Failed to update maintainer edit permission');
++      }
++      const data = await resp.json();
++      checkbox.checked = data.allow_maintainer_edit;
++    } catch (error) {
++      checkbox.checked = !checkbox.checked;
++      console.error(error);
++      showTemporaryTooltip(wrapper, wrapper.getAttribute('data-prompt-error')!);
++    } finally {
++      wrapper.classList.remove('is-loading');
++    }
++  });
++}
++
++export function initRepoIssueSidebar() {
++  registerGlobalInitFunc('initRepoIssueSidebar', (elSidebar) => {
++    initRepoIssueBranchSelector(elSidebar);
++    initRepoIssueDue(elSidebar);
++    initRepoIssueSidebarDependency(elSidebar);
++    initRepoPullRequestAllowMaintainerEdit(elSidebar);
++    // init the combo list: a dropdown for selecting items, and a list for showing selected items and related actions
++    queryElems(elSidebar, '.issue-sidebar-combo', (el) => new IssueSidebarComboList(el).init());
++  });
+ }
+diff --git a/web_src/js/features/repo-issue.ts b/web_src/js/features/repo-issue.ts
+index 8da28f7..03b0c93 100644
+--- a/web_src/js/features/repo-issue.ts
++++ b/web_src/js/features/repo-issue.ts
+@@ -1,5 +1,5 @@
+-import {html, htmlEscape} from '../utils/html.ts';
+-import {createTippy, showTemporaryTooltip} from '../modules/tippy.ts';
++import {htmlEscape} from '../utils/html.ts';
++import {createTippy} from '../modules/tippy.ts';
+ import {
+   addDelegatedEventListener,
+   createElementFromHTML,
+@@ -10,7 +10,7 @@ import {
+ } from '../utils/dom.ts';
+ import {setFileFolding} from './file-fold.ts';
+ import {ComboMarkdownEditor, getComboMarkdownEditor, initComboMarkdownEditor} from './comp/ComboMarkdownEditor.ts';
+-import {parseIssuePageInfo, toAbsoluteUrl} from '../utils.ts';
++import {toAbsoluteUrl} from '../utils.ts';
+ import {GET, POST} from '../modules/fetch.ts';
+ import {showErrorToast} from '../modules/toast.ts';
+ import {initRepoIssueSidebar} from './repo-issue-sidebar.ts';
+@@ -20,40 +20,6 @@ import {registerGlobalInitFunc} from '../modules/observer.ts';
+ 
+ const {appSubUrl} = window.config;
+ 
+-export function initRepoIssueSidebarDependency() {
+-  const elDropdown = document.querySelector('#new-dependency-drop-list');
+-  if (!elDropdown) return;
+-
+-  const issuePageInfo = parseIssuePageInfo();
+-  const crossRepoSearch = elDropdown.getAttribute('data-issue-cross-repo-search');
+-  let issueSearchUrl = `${issuePageInfo.repoLink}/issues/search?q={query}&type=${issuePageInfo.issueDependencySearchType}`;
+-  if (crossRepoSearch === 'true') {
+-    issueSearchUrl = `${appSubUrl}/issues/search?q={query}&priority_repo_id=${issuePageInfo.repoId}&type=${issuePageInfo.issueDependencySearchType}`;
+-  }
+-  fomanticQuery(elDropdown).dropdown({
+-    fullTextSearch: true,
+-    apiSettings: {
+-      cache: false,
+-      rawResponse: true,
+-      url: issueSearchUrl,
+-      onResponse(response: any) {
+-        const filteredResponse = {success: true, results: [] as Array<Record<string, any>>};
+-        const currIssueId = elDropdown.getAttribute('data-issue-id');
+-        // Parse the response from the api to work with our dropdown
+-        for (const issue of response) {
+-          // Don't list current issue in the dependency list.
+-          if (String(issue.id) === currIssueId) continue;
+-          filteredResponse.results.push({
+-            value: issue.id,
+-            name: html`<div class="gt-ellipsis">#${issue.number} ${issue.title}</div><div class="text small tw-break-anywhere">${issue.repository.full_name}</div>`,
+-          });
+-        }
+-        return filteredResponse;
+-      },
+-    },
+-  });
+-}
+-
+ function initRepoIssueLabelFilter(elDropdown: HTMLElement) {
+   const url = new URL(window.location.href);
+   const showArchivedLabels = url.searchParams.get('archived_labels') === 'true';
+@@ -197,32 +163,6 @@ export function initRepoIssueCodeCommentCancel() {
+   });
+ }
+ 
+-export function initRepoPullRequestAllowMaintainerEdit() {
+-  const wrapper = document.querySelector('#allow-edits-from-maintainers')!;
+-  if (!wrapper) return;
+-  const checkbox = wrapper.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+-  checkbox.addEventListener('input', async () => {
+-    const url = `${wrapper.getAttribute('data-url')}/set_allow_maintainer_edit`;
+-    wrapper.classList.add('is-loading');
+-    try {
+-      const resp = await POST(url, {data: new URLSearchParams({
+-        allow_maintainer_edit: String(checkbox.checked),
+-      })});
+-      if (!resp.ok) {
+-        throw new Error('Failed to update maintainer edit permission');
+-      }
+-      const data = await resp.json();
+-      checkbox.checked = data.allow_maintainer_edit;
+-    } catch (error) {
+-      checkbox.checked = !checkbox.checked;
+-      console.error(error);
+-      showTemporaryTooltip(wrapper, wrapper.getAttribute('data-prompt-error')!);
+-    } finally {
+-      wrapper.classList.remove('is-loading');
+-    }
+-  });
+-}
+-
+ export function initRepoIssueComments() {
+   if (!document.querySelector('.repository.view.issue .timeline')) return;
+ 
+@@ -566,6 +506,8 @@ function initIssueTemplateCommentEditors(commentForm: HTMLFormElement) {
+ }
+ 
+ export function initRepoCommentFormAndSidebar() {
++  initRepoIssueSidebar();
++
+   const commentForm = document.querySelector<HTMLFormElement>('.comment.form');
+   if (!commentForm) return;
+ 
+@@ -576,6 +518,4 @@ export function initRepoCommentFormAndSidebar() {
+     // it's quite unclear about the "comment form" elements, sometimes it's for issue comment, sometimes it's for file editor/uploader message
+     initSingleCommentEditor(commentForm);
+   }
+-
+-  initRepoIssueSidebar();
+ }
+diff --git a/web_src/js/index.ts b/web_src/js/index.ts
+index e0b4a3e..5e2cde2 100644
+--- a/web_src/js/index.ts
++++ b/web_src/js/index.ts
+@@ -21,7 +21,7 @@ import {initRepoFileSearch} from './features/repo-findfile.ts';
+ import {initMarkupContent} from './markup/content.ts';
+ import {initRepoFileView} from './features/file-view.ts';
+ import {initUserAuthOauth2, initUserCheckAppUrl} from './features/user-auth.ts';
+-import {initRepoPullRequestAllowMaintainerEdit, initRepoPullRequestReview, initRepoIssueSidebarDependency, initRepoIssueFilterItemLabel} from './features/repo-issue.ts';
++import {initRepoPullRequestReview, initRepoIssueFilterItemLabel} from './features/repo-issue.ts';
+ import {initRepoEllipsisButton, initCommitStatuses} from './features/repo-commit.ts';
+ import {initRepoTopicBar} from './features/repo-home.ts';
+ import {initAdminCommon} from './features/admin/common.ts';
+@@ -130,11 +130,9 @@ const initPerformanceTracer = callInitFunctions([
+   initRepoIssueContentHistory,
+   initRepoIssueList,
+   initRepoIssueFilterItemLabel,
+-  initRepoIssueSidebarDependency,
+   initRepoMigration,
+   initRepoMigrationStatusChecker,
+   initRepoProject,
+-  initRepoPullRequestAllowMaintainerEdit,
+   initRepoPullRequestReview,
+   initRepoReleaseNew,
+   initRepoTopicBar,
